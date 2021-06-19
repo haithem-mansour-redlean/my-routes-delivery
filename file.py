@@ -156,7 +156,7 @@ def update_out_stops_df(date_value):
 # Data
 
 chart = html.Div([
-    html.P("Sélectionner un variable :" ,className="text-nowrap" ),
+    html.P("Sélectionner une variable :" ,className="text-nowrap" ),
     dcc.Dropdown(
         id='names', 
         value='Round_Name', 
@@ -258,7 +258,7 @@ app.layout = dbc.Container([
                        dbc.Col([
                            #selection date :
                            dbc.Col([dbc.Row([   
-                                                dbc.Col([html.P("Selectionner une date :", className="text-nowrap"  ),
+                                                dbc.Col([html.P("Sélectionner une date :", className="text-nowrap"  ),
                                                 dcc.DatePickerSingle(
                                                 id="date-picker",
                                                 min_date_allowed=dt(2021, 1, 1),
