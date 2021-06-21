@@ -6,7 +6,6 @@ Created on Wed Jun  2 23:50:56 2021
 """
 
 
-import datetime
 
 import plotly.graph_objs as go
 
@@ -21,158 +20,13 @@ import plotly.express as px
 from datetime import date
 
 import pandas as pd
+from actions import *
 from datetime import datetime as dt
-import pickle
-import arcgis
-from arcgis.gis import GIS
-import getpass
-from IPython.display import HTML
-
-from arcgis import geocoding
-from arcgis.features import Feature, FeatureSet
-from arcgis.features import GeoAccessor, GeoSeriesAccessor
-
-portal_url = 'https://www.arcgis.com'
-#connect to your GIS
-user_name = 'Mansour_Haythem_LearnArcGIS5' # '<user_name>'
-password = 'redlean123' #'<password>'
-my_gis = GIS(portal_url, user_name, password)
-
-
-model = pickle.load(open('model.pkl', 'rb'))
-
-def cal_pred (df):
-
-    df['new'] = pd.Series([1 for x in range(len(df.index))])
-    int_features = df[['new', 'distance', 'speed']]
-    final_features = int_features.iloc[:,:].values
-    prediction = model.predict(final_features)
-    df["Duration"]=prediction
-    df["Duration"]= pd.to_datetime(df["Duration"], unit='s').dt.strftime("%H:%M:%S")
-    df=df.sort_values(['Round_Name','TourneeId', 'Duration'], ascending=True)
-
-    #prediction=df["Duration"].tolist()
-    return df["Duration"]
-
-# calculer le temps de départ :
-def cal_depart_time(df):
-    
-    df["realInfoHasPrepared"]=pd.to_datetime(df["realInfoHasPrepared"], format='%Y-%m-%d %H:%M:%S')
-    df["sourceClosureDate"]=pd.to_datetime(df["sourceClosureDate"], format='%Y-%m-%d %H:%M:%S')
-    #sort by round Name 
-    df['sourceSequence'] = df.groupby(['Round_Name','TourneeId']).cumcount().add(1)
-    df["depart_time"]= df.sourceClosureDate.shift(1)
-    sourceSequence = df['sourceSequence'].tolist()
-    depart_time=df["depart_time"].tolist()
-    realInfoHasPrepared=df["realInfoHasPrepared"].tolist()
-    for i in range (len(sourceSequence)):
-        if sourceSequence[i] == 1 :
-            depart_time[i] = realInfoHasPrepared[i]
-    return depart_time
-
-#Calculer le temps d'arrivé :
-def cal_Arrive_time (df) :
-    df['Duration_time']= pd.to_timedelta( df['Duration'])
-    df['Arrive_time'] = df['depart_time'] + df['Duration_time']
-    return df['Arrive_time']
-
-# Afficher le tableaux des taches finale : 
-    
-def update_data_df(data_df):
-    data_df["Duration"]= cal_pred (data_df)
-    data_df["depart_time"]= cal_depart_time(data_df)
-    data_df['Arrive_time'] = cal_Arrive_time (data_df)
-    data_df.drop(['new' , "Duration_time"], axis=1 , inplace=True )
-    return data_df
-
-
-def routes_process (routes_df, x):
-    routes_df = routes_df.loc[routes_df["Date"]  == x]
-    routes_df["startTime"]=pd.to_datetime(routes_df["startTime"],format='%Y-%m-%d %H:%M:%S')
-    routes_df["endTime"]=pd.to_datetime(routes_df["endTime"], format='%Y-%m-%d %H:%M:%S')
-    routes_df["date"]=pd.to_datetime(routes_df["date"], format='%Y-%m-%d %H:%M:%S')
-    routes_df["realInfoHasPrepared"]=pd.to_datetime(routes_df["realInfoHasPrepared"],format='%Y-%m-%d %H:%M:%S')
-    routes_df["realInfoHasStarted"]=pd.to_datetime(routes_df["realInfoHasStarted"], format='%Y-%m-%d %H:%M:%S')
-    routes_df["realInfoHasFinished"]=pd.to_datetime(routes_df["realInfoHasFinished"], format='%Y-%m-%d %H:%M:%S')
-    routes_df['count'] = routes_df.groupby('roundName')['roundName'].transform('count')
-    routes_df.drop(['sourceHubName'], axis=1 , inplace=True )
-    
-    routes_df = routes_df[["roundId", "roundName", "startLocation","endLocation","startTime",
-                           "endTime", "weight","costPerUnitTime","maxOrders","maxDuration","count"]]
-    routes_df.columns = ['ObjectID', 'Name', 'StartDepotName', 'EndDepotName', 'EarliestStartTime', 'LatestStartTime','Capacities','CostPerUnitTime','MaxOrderCount','MaxTotalTime','AssignmentRule']
-    
-    routes_df["EarliestStartTime"] = routes_df["EarliestStartTime"].astype("int64") / 10 ** 6
-    routes_df["LatestStartTime"] = routes_df["LatestStartTime"].astype("int64") / 10 ** 6
-    routes_df["Capacities"] = routes_df["Capacities"].astype("int64") 
-    routes_df["CostPerUnitTime"] = routes_df["CostPerUnitTime"].astype("int64")
-    routes_df["MaxOrderCount"] = routes_df["MaxOrderCount"].astype("int64") 
-    routes_df["MaxTotalTime"] = routes_df["MaxTotalTime"].astype("int64") 
-    
-    return routes_df
-def orders_df_process(data, x):
-    data = data.loc[data["Date"]  == x]
-    orders_df=data.filter(['sourceAddress', "Longitude", "Latitude"], axis=1)
-    data=data.reset_index(drop=True)
-    orders_df=data.filter(['sourceAddress', "Longitude", "Latitude"], axis=1)
-    orders_df.columns = ['Address', "Longitude", "Latitude"]
-    return orders_df
-def depots_df_process(depots_df,routes_df ):
-    depots_df=depots_df.loc[depots_df.sourceHubName.isin(routes_df['EndDepotName'])]
-
-    return depots_df
-
-def out_stops_df_process(depots_df,routes_df, orders_df, data, x ): 
-    routes_df = routes_process (routes_df, x)
-    #
-    routes_fset = arcgis.features.FeatureSet.from_dataframe(routes_df)
-    #
-    orders_df=orders_df_process(data, x)
-    #
-    orders_sdf = pd.DataFrame.spatial.from_xy(orders_df, "Longitude", "Latitude")
-    orders_sdf = orders_sdf.drop(axis=1, labels=["Longitude", "Latitude"])
-    orders_fset = orders_sdf.spatial.to_featureset()
-    #
-    depots_df = depots_df_process(depots_df,routes_df )
-    depots_sdf = pd.DataFrame.spatial.from_xy(depots_df, "Longitude", "Latitude")
-    depots_sdf = depots_sdf.drop(axis=1, labels=["Longitude", "Latitude"])
-    depots_sdf=depots_sdf.rename(columns={'sourceHubName':'Name'})
-    depots_fset = depots_sdf.spatial.to_featureset()
-    today = datetime.datetime.now()
-    from arcgis.network.analysis import solve_vehicle_routing_problem
-    results = solve_vehicle_routing_problem(orders= orders_fset,
-                                            depots = depots_fset,
-                                            routes = routes_fset, 
-                                            save_route_data='true',
-                                            populate_directions='true',
-                                            travel_mode="Driving Time",
-                                            default_date=today)
-    out_stops_df = results.out_stops.sdf
-    out_stops_df = out_stops_df[['Name','RouteName','Sequence','ArriveTime','DepartTime', 'SnapX', 'SnapY', 'FromPrevTravelTime', 'FromPrevDistance']].sort_values(by=['RouteName','Sequence'])
-    out_stops_df['new'] = pd.Series([1 for x in range(len(out_stops_df.index))])
-    out_stops_df['speed'] = (out_stops_df.FromPrevDistance/(out_stops_df.FromPrevTravelTime/60))
-    out_stops_df.loc[(out_stops_df.SnapX == 0 ),'speed']= 0
-    out_stops_df.loc[(out_stops_df.FromPrevTravelTime == 0 ),'speed']= 0
-    #
-    out_stops_df["FromPrevTravelTime"]= pd.to_datetime(out_stops_df["FromPrevTravelTime"], unit='m').dt.strftime("%H:%M:%S")
-    int_features = out_stops_df[['new', 'FromPrevDistance', 'speed']]
-    final_features = int_features.iloc[:,:].values
-    prediction = model.predict(final_features)
-    out_stops_df["Duration"]=prediction
-    out_stops_df.loc[(out_stops_df.SnapX == 0 ),'Duration']= 0
-    out_stops_df["Duration"]= pd.to_datetime(out_stops_df["Duration"], unit='s').dt.strftime("%H:%M:%S")
-    out_stops_df['Duration_time']= pd.to_timedelta( out_stops_df['Duration'])
-    out_stops_df['Duration_trajet']= pd.to_timedelta( out_stops_df['FromPrevTravelTime'])
-    out_stops_df['Temps du service'] = out_stops_df['Duration_time'] - out_stops_df['Duration_trajet']
-    out_stops_df['Arrive_time'] = out_stops_df['DepartTime'] + out_stops_df['Duration_time']
-    out_stops_df.drop(['new' , "Duration_time", "ArriveTime"], axis=1 , inplace=True )
-    
-    return (out_stops_df)
 
 
 
 
-
-
+# define app
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.SLATE])
 server = app.server
 app.title = "DASHBOARD"
@@ -243,6 +97,8 @@ def update_figure(depots_df):
             hovermode='closest',
             hoverdistance=5,
             height = 300,
+            paper_bgcolor="#2D3038",
+            plot_bgcolor="#2D3038",
             mapbox=dict(
                 accesstoken=mapbox_access_token,
                 bearing=100,
@@ -254,6 +110,10 @@ def update_figure(depots_df):
                 pitch=40,
                 zoom=10
             ),
+            font=dict(
+            size=10,
+            color="#95969A"
+            )
         )
     }
 
@@ -297,15 +157,15 @@ def update_out_stops_df(date_value):
         )
     return table"""
 
-# Data
+
 
 chart = html.Div([
-    html.P("Sélectionner une variable :" ,className="text-nowrap" ),
+    html.P("Sélectionner un variable :" ,className="text-nowrap" ),
     dcc.Dropdown(
         id='names', 
         value='Round_Name', 
         options=[{'value': x, 'label': x} 
-                 for x in ['sourceAddress', 'Round_Name', 'Expediteur']],
+                 for x in ['Round_Name', 'Expediteur', 'ID_de_la_tache','metadataFACTURATION', ]],
         clearable=False,
     ),       
 ])
@@ -322,6 +182,13 @@ def generate_chart(names,  date_value):
         date_string = date_object.strftime('%Y-%m-%d')
         data_df = data_df.loc[data_df["Date"]  == date_string]
     fig = px.pie(data_df, names=names)
+    fig.update_layout(paper_bgcolor='#2D3038',
+                      margin=go.layout.Margin(l=10, r=0, t=0, b=0),
+                      font=dict(
+                                size=10,
+                                color="#95969A"
+                            )),
+    
     return fig
 
 # Build App
@@ -416,9 +283,10 @@ app.layout = dbc.Container([
                            
                            dbc.Col([dbc.Row([dbc.Col([ chart ])]),  
                                     html.Br(),
-                                    dbc.Row([dbc.Col([dcc.Graph(id="pie-chart")],)]), ], style = { "padding": "1rem","borderColor" : "#53555B", "boxShadow" : "0px 1px 3px","borderRadius": "2px"}),
+                                    dbc.Row([dbc.Col([dcc.Graph(id="pie-chart", config={'displayModeBar': False} )],)]), ], style = { "padding": "1rem","borderColor" : "#53555B", "boxShadow" : "0px 1px 3px","borderRadius": "2px"}),
                            html.Br(),
-                           dbc.Col([dbc.Row([dbc.Col([ dcc.Graph(id="output-update_graphs") ])]),], style = { "padding": "1rem","borderColor" : "#53555B", "boxShadow" : "0px 1px 3px","borderRadius": "2px"})
+                             dbc.Col([dbc.Row([dbc.Col([html.P("La distance parcourue par le livreur par heure :", className="text-nowrap" )])]),
+                                               dbc.Col([dbc.Col([dcc.Graph(id="output-update_graphs", config={'displayModeBar': False})],style = {"marginTop": "1rem"})])], style = {"padding": "1rem","borderColor" : "#53555B", "boxShadow" : "0px 1px 3px","borderRadius": "2px", 'height': '58.3rem'}),
                        ],style = {"padding": "2rem",
                                  "borderRadius": "2px",
                                  "backgroundColor": "#2D3038",
@@ -431,7 +299,7 @@ app.layout = dbc.Container([
                              # map tasks
                             dbc.Col([dbc.Row([dbc.Col([html.P("Carte montre l'emplacement des Préstations  :", className="text-nowrap" )])]), 
                                              html.Br(),
-                                             dbc.Col([dbc.Col([dcc.Graph(id="output-map-upload")])])], style = { "padding": "1rem","borderColor" : "#53555B", "boxShadow" : "0px 1px 3px","borderRadius": "2px",'height':'50rem' }),
+                                             dbc.Col([dbc.Col([dcc.Graph(id="output-map-upload", config={'displayModeBar': False})])])], style = { "padding": "1rem","borderColor" : "#53555B", "boxShadow" : "0px 1px 3px","borderRadius": "2px",'height':'50rem' }),
                             html.Br(),
                             #tableau optimale : 
                             dbc.Col([dbc.Row([dbc.Col([html.P("Tableau des Routes Optimales  :", className="text-nowrap" )]),]), 
@@ -469,7 +337,7 @@ app.layout = dbc.Container([
                         dbc.Col([
                             dbc.Col([dbc.Col([html.P("L'emplacement des Dépots :", className="text-nowrap" )])]),
                             html.Br(),
-                            dbc.Col([dbc.Col([dcc.Graph(figure=update_figure(depots_df))])], style = {"height" : "40rem" ,"display": "flex" })
+                            dbc.Col([dbc.Col([dcc.Graph(figure=update_figure(depots_df), config={'displayModeBar': False})])], style = {"height" : "40rem" ,"display": "flex" })
                             ], style = { "padding": "1rem","backgroundColor": "#2D3038","borderColor" : "#53555B", "boxShadow" : "0px 1px 3px","borderRadius": "2px",'height':'50rem' })
                         ], style = { "padding": "2rem","boxShadow" : "0px 1px 3px","borderRadius": "2px",'height':'55rem',"backgroundColor": "#2D3038","borderColor" : "#53555B" })
                 ], width=4),
@@ -480,6 +348,8 @@ app.layout = dbc.Container([
     )
 ], fluid=True)
     
+
+
 
 @app.callback(
     Output("output-data-upload", "children"),
@@ -576,18 +446,20 @@ def update_graph(date_value):
 
     fig = go.Figure(
     data=[go.Bar(x=x, y=y)],
-    layout=go.Layout(
-        title=go.layout.Title(text="La distance parcourue par le livreur par heure :"),
-    ),
+
     
     )
     fig.update_layout(
+    margin=go.layout.Margin(l=0, r=0, t=0, b=0),
     xaxis_title="heure",
     yaxis_title="Distance(km)",
     legend_title="Legend Title",
+    plot_bgcolor = "#2D3038",
+    paper_bgcolor= "#2D3038",
+    height = 400,
     font=dict(
         size=10,
-        color="#252e3f"
+        color="#95969A"
     )
     )
     return fig
